@@ -1,0 +1,20 @@
+name: robot
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - trimesh
+  - mujoco
+  - libigl
+  - jinja2
+  - tqdm
+  - pip
+  - pip:
+      - cvxpy
+      - smplx
+      - torch
+      - tyro
+      - viser
+      - yourdfpy

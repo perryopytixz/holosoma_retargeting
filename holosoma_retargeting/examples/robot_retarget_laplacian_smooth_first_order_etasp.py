@@ -26,7 +26,7 @@ from holosoma_retargeting.config_types.retargeter import RetargeterConfig  # noq
 from holosoma_retargeting.config_types.retargeting import RetargetingConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.config_types.task import TaskConfig  # noqa: E402
-from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
+from holosoma_retargeting.src.interaction_mesh_retargeter_laplacian_smooth_first_order_etasp import (  # noqa: E402
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
 from holosoma_retargeting.src.utils import (  # noqa: E402
@@ -61,9 +61,9 @@ DEFAULT_DATA_FORMATS = {
 DEFAULT_RESULTS_ROOT = Path(__file__).resolve().parents[1] / "demo_results_total"
 
 DEFAULT_SAVE_DIRS = {
-    "robot_only": str(DEFAULT_RESULTS_ROOT / "original" / "{robot}" / "robot_only" / "omomo"),
-    "object_interaction": str(DEFAULT_RESULTS_ROOT / "original" / "{robot}" / "object_interaction" / "omomo"),
-    "climbing": str(DEFAULT_RESULTS_ROOT / "original" / "{robot}" / "climbing" / "mocap_climb"),
+    "robot_only": str(DEFAULT_RESULTS_ROOT / "laplacian_smooth_first_order_etasp" / "{robot}" / "robot_only" / "omomo"),
+    "object_interaction": str(DEFAULT_RESULTS_ROOT / "laplacian_smooth_first_order_etasp" / "{robot}" / "object_interaction" / "omomo"),
+    "climbing": str(DEFAULT_RESULTS_ROOT / "laplacian_smooth_first_order_etasp" / "{robot}" / "climbing" / "mocap_climb"),
 }
 
 
