@@ -41,6 +41,16 @@ from viser_utils import create_motion_control_sliders  # type: ignore[import-not
 
 
 VARIANT_NAME = "sandbox_experimental"
+HESSIAN_COMPONENT_NAMES = (
+    "lap",
+    "lap_j_only",
+    "lap_robot_rows",
+    "lap_object_rows",
+    "nominal",
+    "q_diag",
+    "smooth",
+    "total",
+)
 
 
 class InteractionMeshRetargeter:
@@ -178,6 +188,7 @@ class InteractionMeshRetargeter:
         self.w_nominal_tracking_init = w_nominal_tracking_init
         self.nominal_tracking_tau = nominal_tracking_tau
         self.track_nominal_indices = task_constants.NOMINAL_TRACKING_INDICES
+        self._hessian_component_records: list[dict[str, int | np.ndarray]] = []
 
     def _init_foot_lock(self, foot_lock: FootLockConfig | None) -> None:
         """Initialize foot lock configuration and normalize window mappings."""
@@ -416,6 +427,7 @@ class InteractionMeshRetargeter:
         original_lap_costs = []
         original_smooth_costs = []
         original_lap_smooth_costs = []
+        self._hessian_component_records = []
 
         print(f"\nStarting motion retargeting for {num_frames} frames...")
 
@@ -530,6 +542,15 @@ class InteractionMeshRetargeter:
                 handle.remove()
             robot_kpts_handle_list.clear()
 
+        dest_res_path = Path(dest_res_path)
+        hessian_components_path = self._hessian_components_path(dest_res_path)
+        hessian_component_payload = self._hessian_component_payload(
+            num_frames=num_frames,
+            source_result_path=dest_res_path,
+        )
+
+        np.savez(hessian_components_path, **hessian_component_payload)
+
         # Save results
         np.savez(
             dest_res_path,
@@ -540,8 +561,10 @@ class InteractionMeshRetargeter:
             original_lap_cost=np.asarray(original_lap_costs, dtype=float),
             original_smooth_cost=np.asarray(original_smooth_costs, dtype=float),
             original_lap_smooth_cost=np.asarray(original_lap_smooth_costs, dtype=float),
+            hessian_components_file=np.asarray(hessian_components_path.name),
         )
         print("Saving results to path:", dest_res_path)
+        print("Saving Hessian component diagnostics to path:", hessian_components_path)
 
         if self.visualize:
             robot_dof = len(self.viser_robot.get_actuated_joint_limits())
@@ -591,6 +614,7 @@ class InteractionMeshRetargeter:
         verbose=False,
         init_t=False,
         frame_idx: int = 0,
+        inner_iter: int = 0,
     ):
         """The main function to solve a single iteration of the DiffIK problem.
         Args:
@@ -634,6 +658,11 @@ class InteractionMeshRetargeter:
 
         Kron = sp.kron(L, sp.eye(3, format="csr"), format="csr")
         J_L = Kron @ J_V
+        assert J_L.shape[1] == self.nq_a, (
+            f"Expected reduced Laplacian Jacobian with {self.nq_a} columns, "
+            f"got {J_L.shape[1]}"
+        )
+        J_lap_active = J_L
 
         lap0 = L @ vertices
         lap0_vec = lap0.reshape(-1)  # (3V,)
@@ -644,13 +673,9 @@ class InteractionMeshRetargeter:
 
         # Decision variables
         dqa = cp.Variable(len(self.q_a_indices), name="dqa")
-        lap_var = cp.Variable(3 * V, name="laplacian")
 
         # Constraints list
         constraints = []
-
-        # Linear equality
-        constraints += [cp.Constant(J_L[:, self.q_a_indices]) @ dqa - lap_var == -lap0_vec]
 
         # Foot constraints (sticking + foot lock window Z pinning)
         apply_foot_sticking = (self.q_a_init_idx < 12) and self.activate_foot_sticking
@@ -729,7 +754,8 @@ class InteractionMeshRetargeter:
         # Objective
         obj_terms = []
 
-        obj_terms.append(cp.sum_squares(cp.multiply(sqrt_w3, lap_var - target_lap_vec)))
+        lap_residual = cp.Constant(J_lap_active) @ dqa + lap0_vec - target_lap_vec
+        obj_terms.append(cp.sum_squares(cp.multiply(sqrt_w3, lap_residual)))
 
         # nominal tracking for selected indices
         if (w_nominal_tracking > 0) and (q_a_nominal is not None):
@@ -754,6 +780,24 @@ class InteractionMeshRetargeter:
                 # if a full matrix was supplied, fall back to quad_form
                 obj_terms.append(cp.quad_form(dqa - dqa_smooth, Wsmooth))
 
+        hessian_components = self._assemble_hessian_components(
+            J_lap_active=J_lap_active,
+            J_V_active=J_V,
+            sqrt_w3=sqrt_w3,
+            num_robot_vertices=V_r,
+            w_nominal_tracking=w_nominal_tracking,
+            q_a_nominal=q_a_nominal,
+            smooth_weight=self.smooth_weight,
+            q_diag=Qd,
+        )
+        self._hessian_component_records.append(
+            {
+                "frame_idx": int(frame_idx),
+                "inner_iter": int(inner_iter),
+                "component_matrices": self._stack_hessian_components(hessian_components),
+            }
+        )
+
         problem = cp.Problem(cp.Minimize(cp.sum(obj_terms)), constraints)
 
         # -------- Solve with Clarabel --------
@@ -775,6 +819,165 @@ class InteractionMeshRetargeter:
         q_star[3:7] /= np.linalg.norm(q_star[3:7]) + 1e-12
 
         return q_star, cost
+
+    def _assemble_hessian_components(
+        self,
+        J_lap_active: np.ndarray,
+        J_V_active: np.ndarray,
+        sqrt_w3: np.ndarray,
+        num_robot_vertices: int,
+        w_nominal_tracking: float,
+        q_a_nominal: np.ndarray | None,
+        smooth_weight: float | np.ndarray,
+        q_diag: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Build reduced Hessian components for the current local quadratic objective."""
+        lap_hessian = self._assemble_laplacian_reduced_hessian(J_lap_active, sqrt_w3)
+        lap_j_only_hessian = self._assemble_weighted_jacobian_hessian(J_V_active, sqrt_w3)
+        num_rows = int(np.asarray(sqrt_w3).size)
+        if num_rows % 3 != 0:
+            raise ValueError(f"Expected xyz row weights with size divisible by 3, got {num_rows}")
+        num_vertices = num_rows // 3
+        if not (0 <= num_robot_vertices <= num_vertices):
+            raise ValueError(f"num_robot_vertices={num_robot_vertices} outside vertex range 0..{num_vertices}")
+        robot_rows = self._row_slice_for_vertices(0, num_robot_vertices)
+        object_rows = self._row_slice_for_vertices(num_robot_vertices, num_vertices)
+        lap_robot_rows_hessian = self._assemble_weighted_jacobian_hessian(
+            J_lap_active[robot_rows, :],
+            sqrt_w3[robot_rows],
+        )
+        lap_object_rows_hessian = self._assemble_weighted_jacobian_hessian(
+            J_lap_active[object_rows, :],
+            sqrt_w3[object_rows],
+        )
+        nominal_hessian = self._assemble_nominal_tracking_hessian(w_nominal_tracking, q_a_nominal)
+        q_diag_hessian = self._assemble_q_diag_hessian(q_diag)
+        smooth_hessian = self._assemble_smooth_hessian(smooth_weight)
+        total_hessian = lap_hessian + nominal_hessian + q_diag_hessian + smooth_hessian
+
+        return {
+            "lap": lap_hessian,
+            "lap_j_only": lap_j_only_hessian,
+            "lap_robot_rows": lap_robot_rows_hessian,
+            "lap_object_rows": lap_object_rows_hessian,
+            "nominal": nominal_hessian,
+            "q_diag": q_diag_hessian,
+            "smooth": smooth_hessian,
+            "total": self._symmetrize_hessian(total_hessian),
+        }
+
+    def _assemble_laplacian_reduced_hessian(self, J_lap_active: np.ndarray, sqrt_w3: np.ndarray) -> np.ndarray:
+        """Build the Hessian of the reduced Laplacian term over dqa."""
+        return self._assemble_weighted_jacobian_hessian(J_lap_active, sqrt_w3)
+
+    def _assemble_weighted_jacobian_hessian(self, J_like: np.ndarray, sqrt_weights: np.ndarray) -> np.ndarray:
+        """Build 2 * J.T @ W @ J from row square-root weights."""
+        J = J_like.toarray() if sp.issparse(J_like) else np.asarray(J_like, dtype=float)
+        sqrt_weights = np.asarray(sqrt_weights, dtype=float).reshape(-1)
+        if J.shape[0] != sqrt_weights.size:
+            raise ValueError(f"Expected {J.shape[0]} row weights, got {sqrt_weights.size}")
+        if J.shape[0] == 0:
+            return np.zeros((J.shape[1], J.shape[1]), dtype=float)
+        weights = sqrt_weights**2
+        H = 2.0 * (J.T @ (weights[:, None] * J))
+        return self._symmetrize_hessian(H)
+
+    @staticmethod
+    def _row_slice_for_vertices(start_vertex: int, stop_vertex: int) -> slice:
+        """Return the xyz residual-row slice for a half-open vertex range."""
+        return slice(3 * int(start_vertex), 3 * int(stop_vertex))
+
+    def _assemble_nominal_tracking_hessian(
+        self,
+        w_nominal_tracking: float,
+        q_a_nominal: np.ndarray | None,
+    ) -> np.ndarray:
+        """Build the Hessian contribution from nominal tracking."""
+        n = self.nq_a
+        H = np.zeros((n, n), dtype=float)
+        if (w_nominal_tracking > 0) and (q_a_nominal is not None):
+            idx = np.array(self.track_nominal_indices, dtype=int)
+            if idx.size > 0:
+                H[idx, idx] += 2.0 * float(w_nominal_tracking)
+        return self._symmetrize_hessian(H)
+
+    def _assemble_q_diag_hessian(self, q_diag: np.ndarray) -> np.ndarray:
+        """Build the Hessian contribution from the diagonal configuration cost."""
+        H = 2.0 * np.diag(np.asarray(q_diag, dtype=float).reshape(-1))
+        return self._symmetrize_hessian(H)
+
+    def _assemble_smooth_hessian(self, smooth_weight: float | np.ndarray) -> np.ndarray:
+        """Build the Hessian contribution from the temporal smoothness cost."""
+        n = self.nq_a
+        if np.isscalar(smooth_weight):
+            H = 2.0 * float(smooth_weight) * np.eye(n)
+        else:
+            Wsmooth = np.asarray(smooth_weight, dtype=float)
+            if Wsmooth.ndim == 1:
+                H = 2.0 * np.diag(Wsmooth)
+            else:
+                H = Wsmooth + Wsmooth.T
+        return self._symmetrize_hessian(H)
+
+    @staticmethod
+    def _symmetrize_hessian(hessian: np.ndarray) -> np.ndarray:
+        """Remove small asymmetry from dense Hessian assembly."""
+        H = np.asarray(hessian, dtype=float)
+        return 0.5 * (H + H.T)
+
+    def _stack_hessian_components(self, components: dict[str, np.ndarray]) -> np.ndarray:
+        """Stack Hessian components in the stable order saved to diagnostics."""
+        return np.stack([components[name] for name in HESSIAN_COMPONENT_NAMES], axis=0).astype(float, copy=False)
+
+    @staticmethod
+    def _hessian_components_path(dest_res_path: str | Path) -> Path:
+        """Return the sidecar path for dense Hessian component diagnostics."""
+        result_path = Path(dest_res_path)
+        return result_path.with_name(f"{result_path.stem}_hessian_components.npz")
+
+    def _hessian_component_payload(self, num_frames: int, source_result_path: Path) -> dict[str, np.ndarray]:
+        """Return all arrays written to the Hessian component diagnostics sidecar."""
+        hessian_frame = np.asarray([record["frame_idx"] for record in self._hessian_component_records], dtype=int)
+        hessian_inner_iter = np.asarray(
+            [record["inner_iter"] for record in self._hessian_component_records], dtype=int
+        )
+
+        if self._hessian_component_records:
+            hessian_component_matrices = np.stack(
+                [np.asarray(record["component_matrices"], dtype=float) for record in self._hessian_component_records],
+                axis=0,
+            )
+        else:
+            hessian_component_matrices = np.empty(
+                (0, len(HESSIAN_COMPONENT_NAMES), self.nq_a, self.nq_a),
+                dtype=float,
+            )
+
+        frame_hessian_component_matrices = np.full(
+            (num_frames, len(HESSIAN_COMPONENT_NAMES), self.nq_a, self.nq_a),
+            np.nan,
+            dtype=float,
+        )
+        latest_by_frame: dict[int, int] = {}
+        for record_idx, record in enumerate(self._hessian_component_records):
+            frame_idx = int(record["frame_idx"])
+            if not (0 <= frame_idx < num_frames):
+                continue
+            current_idx = latest_by_frame.get(frame_idx)
+            if current_idx is None or int(record["inner_iter"]) >= int(hessian_inner_iter[current_idx]):
+                latest_by_frame[frame_idx] = record_idx
+
+        for frame_idx, record_idx in latest_by_frame.items():
+            frame_hessian_component_matrices[frame_idx] = hessian_component_matrices[record_idx]
+
+        return {
+            "source_result_file": np.asarray(source_result_path.name),
+            "hessian_frame": hessian_frame,
+            "hessian_inner_iter": hessian_inner_iter,
+            "hessian_component_names": np.asarray(HESSIAN_COMPONENT_NAMES),
+            "hessian_component_matrices": hessian_component_matrices,
+            "frame_hessian_component_matrices": frame_hessian_component_matrices,
+        }
 
     def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> bool:
         """Check whether a foot link is locked by configured frame windows."""
@@ -860,7 +1063,7 @@ class InteractionMeshRetargeter:
     ):
         """Iterate the solver for multiple iterations."""
         last_cost = np.inf
-        for _ in range(n_iter):
+        for inner_iter in range(n_iter):
             q_a_n_last = q_n[self.q_a_indices]
             q_n, cost = self.solve_single_iteration(
                 q_locked=q_locked,
@@ -874,6 +1077,7 @@ class InteractionMeshRetargeter:
                 w_nominal_tracking=w_nominal_tracking,
                 init_t=init_t,
                 frame_idx=frame_idx,
+                inner_iter=inner_iter,
             )
             if np.isclose(cost, last_cost):
                 break

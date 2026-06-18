@@ -1305,6 +1305,24 @@ class InteractionMeshRetargeter:
                 pC_B = np.zeros(3) # 如果没有提供偏移，就默认点就在body坐标系的原点
 
             J = self._calc_contact_jacobian_from_point(body_id, pC_B) # 算这个点在世界坐标系下的雅可比，输入点坐标是pC_B（body坐标系下），函数内部会把它转换到世界坐标系并计算雅可比
+            # NOTE:
+            # _calc_contact_jacobian_from_point(body_id, pC_B) computes the Jacobian
+            # of the point C whose body-frame coordinate is pC_B:
+            #
+            #     p_WC = p_WB + R_WB @ pC_B
+            #
+            # The current code returns the body origin position p_WB below. This is
+            # consistent with the current callers because they do not pass
+            # point_offsets, so pC_B = 0 and p_WC == p_WB.
+            #
+            # If a nonzero point_offsets is used in the future, pos_world should be
+            # changed to the same point used by the Jacobian:
+            #
+            #     R_WB = self.robot_data.xmat[body_id].reshape(3, 3)
+            #     p_WB = self.robot_data.xpos[body_id]
+            #     pos_world = p_WB + R_WB @ pC_B
+            #
+            # Otherwise p_XC and J_XC would describe different points.
             pos_world = self.robot_data.xpos[body_id] # 这里实际上是 body 原点在世界坐标系下的位置，如果 point_offsets 不为零，真正的点 C 的世界坐标应该是 pos_world + R_WB @ pC_B
 
             if obj_frame:

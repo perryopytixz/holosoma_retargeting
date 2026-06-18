@@ -26,6 +26,9 @@ sys.path.insert(0, str(src_path))
 from mujoco_utils import (  # type: ignore[import-not-found,no-redef]  # noqa: E402
     _world_mesh_from_geom,
 )
+from original_cost_components import (  # type: ignore[import-not-found,no-redef]  # noqa: E402
+    evaluate_original_lap_smooth_cost,
+)
 from utils import (  # type: ignore[import-not-found,no-redef]  # noqa: E402
     calculate_laplacian_coordinates,
     calculate_laplacian_matrix,
@@ -407,6 +410,9 @@ class InteractionMeshRetargeter:
         tetrahedra = []
         obj_pts_demo_list = []  # scaled object pts
         obj_pts_list = []  # original size object pts
+        original_lap_costs = []
+        original_smooth_costs = []
+        original_lap_smooth_costs = []
 
         print(f"\nStarting motion retargeting for {num_frames} frames...")
 
@@ -460,10 +466,12 @@ class InteractionMeshRetargeter:
                 else:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
+                q_previous = retargeted_motions[-1]
+
                 q, cost = self.iterate(
                     q_locked=q_locked_list[i],
                     q_n=q,
-                    q_t_last=retargeted_motions[-1],
+                    q_t_last=q_previous,
                     target_laplacian=target_laplacian,
                     adj_list=adj_list,
                     obj_pts_local=object_points_local,
@@ -474,6 +482,19 @@ class InteractionMeshRetargeter:
                     n_iter=50 if i == 0 else 10,
                     frame_idx=i,
                 )
+                original_lap_cost, original_smooth_cost, original_lap_smooth_cost = (
+                    evaluate_original_lap_smooth_cost(
+                        self,
+                        q_current=q,
+                        q_previous=q_previous,
+                        target_laplacian=target_laplacian,
+                        adj_list=adj_list,
+                        obj_pts_local=object_points_local,
+                    )
+                )
+                original_lap_costs.append(original_lap_cost)
+                original_smooth_costs.append(original_smooth_cost)
+                original_lap_smooth_costs.append(original_lap_smooth_cost)
                 if self.debug:
                     robot_link_positions = self._get_robot_link_positions(
                         q, self.laplacian_match_links.values()
@@ -513,6 +534,9 @@ class InteractionMeshRetargeter:
             human_joints=human_joint_motions,
             fps=30,
             cost=cost,
+            original_lap_cost=np.asarray(original_lap_costs, dtype=float),
+            original_smooth_cost=np.asarray(original_smooth_costs, dtype=float),
+            original_lap_smooth_cost=np.asarray(original_lap_smooth_costs, dtype=float),
         )
         print("Saving results to path:", dest_res_path)
 
