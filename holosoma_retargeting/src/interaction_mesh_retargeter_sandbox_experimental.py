@@ -795,6 +795,18 @@ class InteractionMeshRetargeter:
                 "frame_idx": int(frame_idx),
                 "inner_iter": int(inner_iter),
                 "component_matrices": self._stack_hessian_components(hessian_components),
+                "q_active": np.asarray(q_a_n_last, dtype=float).copy(),
+                "q_eval": np.asarray(q, dtype=float).copy(),
+                "lap_J_V": np.asarray(J_V, dtype=float).copy(),
+                "lap_J_lap": (
+                    J_lap_active.toarray()
+                    if sp.issparse(J_lap_active)
+                    else np.asarray(J_lap_active, dtype=float)
+                ).copy(),
+                "lap_weights": np.asarray(sqrt_w3, dtype=float).reshape(-1) ** 2,
+                "lap_vertices": np.asarray(vertices, dtype=float).copy(),
+                "lap_num_robot_vertices": int(V_r),
+                "lap_robot_link_keys": np.asarray(robot_link_keys, dtype=str),
             }
         )
 
@@ -947,11 +959,51 @@ class InteractionMeshRetargeter:
                 [np.asarray(record["component_matrices"], dtype=float) for record in self._hessian_component_records],
                 axis=0,
             )
+            hessian_q_active = np.stack(
+                [np.asarray(record["q_active"], dtype=float) for record in self._hessian_component_records],
+                axis=0,
+            )
+            hessian_q_eval = np.stack(
+                [np.asarray(record["q_eval"], dtype=float) for record in self._hessian_component_records],
+                axis=0,
+            )
+            hessian_lap_J_V = np.stack(
+                [np.asarray(record["lap_J_V"], dtype=float) for record in self._hessian_component_records],
+                axis=0,
+            )
+            hessian_lap_J_lap = np.stack(
+                [np.asarray(record["lap_J_lap"], dtype=float) for record in self._hessian_component_records],
+                axis=0,
+            )
+            hessian_lap_weights = np.stack(
+                [np.asarray(record["lap_weights"], dtype=float) for record in self._hessian_component_records],
+                axis=0,
+            )
+            hessian_lap_vertices = np.stack(
+                [np.asarray(record["lap_vertices"], dtype=float) for record in self._hessian_component_records],
+                axis=0,
+            )
+            hessian_lap_num_robot_vertices = np.asarray(
+                [record["lap_num_robot_vertices"] for record in self._hessian_component_records],
+                dtype=int,
+            )
+            hessian_lap_robot_link_keys = np.asarray(
+                self._hessian_component_records[0]["lap_robot_link_keys"],
+                dtype=str,
+            )
         else:
             hessian_component_matrices = np.empty(
                 (0, len(HESSIAN_COMPONENT_NAMES), self.nq_a, self.nq_a),
                 dtype=float,
             )
+            hessian_q_active = np.empty((0, self.nq_a), dtype=float)
+            hessian_q_eval = np.empty((0, self.nq), dtype=float)
+            hessian_lap_J_V = np.empty((0, 0, self.nq_a), dtype=float)
+            hessian_lap_J_lap = np.empty((0, 0, self.nq_a), dtype=float)
+            hessian_lap_weights = np.empty((0, 0), dtype=float)
+            hessian_lap_vertices = np.empty((0, 0, 3), dtype=float)
+            hessian_lap_num_robot_vertices = np.empty((0,), dtype=int)
+            hessian_lap_robot_link_keys = np.empty((0,), dtype=str)
 
         frame_hessian_component_matrices = np.full(
             (num_frames, len(HESSIAN_COMPONENT_NAMES), self.nq_a, self.nq_a),
@@ -977,6 +1029,14 @@ class InteractionMeshRetargeter:
             "hessian_component_names": np.asarray(HESSIAN_COMPONENT_NAMES),
             "hessian_component_matrices": hessian_component_matrices,
             "frame_hessian_component_matrices": frame_hessian_component_matrices,
+            "hessian_q_active": hessian_q_active,
+            "hessian_q_eval": hessian_q_eval,
+            "hessian_lap_J_V": hessian_lap_J_V,
+            "hessian_lap_J_lap": hessian_lap_J_lap,
+            "hessian_lap_weights": hessian_lap_weights,
+            "hessian_lap_vertices": hessian_lap_vertices,
+            "hessian_lap_num_robot_vertices": hessian_lap_num_robot_vertices,
+            "hessian_lap_robot_link_keys": hessian_lap_robot_link_keys,
         }
 
     def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> bool:
