@@ -57,16 +57,22 @@ The data should contain `.pt` files.
 
 #### Convert the Original LAFAN Data Format for Motion Retargeting
 
-We need some data processing files from the [LAFAN GitHub repo](https://github.com/ubisoft/ubisoft-laforge-animation-dataset).
+Run the self-contained converter from the directory containing this README:
 
 ```bash
-cd holosoma_retargeting/data_utils/
-git clone https://github.com/ubisoft/ubisoft-laforge-animation-dataset.git
-mv ubisoft-laforge-animation-dataset/lafan1 .
-python extract_global_positions.py --input_dir DATA_FOLDER_PATH/lafan --output_dir ../demo_data/lafan
+python data_conversion/convert_lafan_bvh_to_holosoma.py \
+    DATA_FOLDER_PATH/lafan/dance2_subject1.bvh \
+    --output-dir demo_data/lafan
 ```
 
-This will convert the BVH files to `.npy` format with global joint positions.
+The converter performs BVH forward kinematics, reorders joints to
+`LAFAN_DEMO_JOINTS`, validates 30 FPS / centimeter / Y-up / toe / handedness
+semantics, and writes meter-scale Y-up `.npy` input plus a provenance JSON
+sidecar. The LAFAN loader performs the final Y-up-to-Z-up rotation.
+See
+[new_20260724_retarget_lafan_to_holosoma_data_note.md](new_20260724_retarget_lafan_to_holosoma_data_note.md)
+for the native/imported data inventory, incompatible-input diagnosis,
+coordinate-system correction, and current adapter workflow.
 
 **Note**: For LAFAN data, you need to relax the foot sticking constraint by setting `--retargeter.foot-sticking-tolerance` (default is stricter). You can adjust this tolerance number based on your data quality and retargeting results.
 

@@ -22,9 +22,12 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from holosoma_retargeting.config_types.data_type import DEMO_JOINTS_REGISTRY, MotionDataConfig  # noqa: E402
-from holosoma_retargeting.config_types.retargeter import RetargeterConfig  # noqa: E402
 from holosoma_retargeting.config_types.retargeting import RetargetingConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
+from holosoma_retargeting.config_types.sandbox_retargeting import (  # noqa: E402
+    SandboxRetargeterConfig,
+    SandboxRetargetingConfig,
+)
 from holosoma_retargeting.config_types.task import TaskConfig  # noqa: E402
 from holosoma_retargeting.src.interaction_mesh_retargeter_sandbox_extra_keypoints_experimental import (  # noqa: E402
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
@@ -448,14 +451,14 @@ def convert_object_poses_to_mujoco_order(object_poses: np.ndarray) -> np.ndarray
 
 
 def build_retargeter_kwargs_from_config(
-    retargeter_config: RetargeterConfig,
+    retargeter_config: SandboxRetargeterConfig,
     constants: SimpleNamespace,
     object_urdf_path: str | None,
     task_type: str,
 ) -> dict:
-    """Build kwargs for InteractionMeshRetargeter from a RetargeterConfig.
+    """Build kwargs for InteractionMeshRetargeter from a sandbox retargeter config.
     This is a convenience function that allows building kwargs directly from
-    a RetargeterConfig without needing a full RetargetingConfig.
+    a retargeter config without needing a full RetargetingConfig.
     Args:
         retargeter_config: Retargeter configuration
         constants: Task constants
@@ -479,6 +482,9 @@ def build_retargeter_kwargs_from_config(
         "visualize": retargeter_config.visualize,
         "debug": retargeter_config.debug,
         "w_nominal_tracking_init": retargeter_config.w_nominal_tracking_init,
+        "hessian_record_enabled": retargeter_config.hessian_record_enabled,
+        "hessian_record_frame_stride": retargeter_config.hessian_record_frame_stride,
+        "hessian_record_inner_stride": retargeter_config.hessian_record_inner_stride,
     }
     if task_type == "climbing":
         kwargs["nominal_tracking_tau"] = retargeter_config.nominal_tracking_tau
@@ -601,7 +607,7 @@ def determine_output_path(
 # ----------------------------- Main -----------------------------
 
 
-def main(cfg: RetargetingConfig) -> None:
+def main(cfg: SandboxRetargetingConfig) -> None:
     """Main retargeting pipeline.
     Args:
         cfg: Configuration arguments
@@ -726,5 +732,5 @@ def main(cfg: RetargetingConfig) -> None:
 
 
 if __name__ == "__main__":
-    cfg = tyro.cli(RetargetingConfig)
+    cfg = tyro.cli(SandboxRetargetingConfig)
     main(cfg)

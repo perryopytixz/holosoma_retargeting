@@ -722,8 +722,12 @@ def transform_y_up_to_z_up(points):
 
     Transformation:
     - Y-axis (up) becomes Z-axis (up)
-    - Z-axis (forward) becomes Y-axis (forward)
-    - X-axis (right) stays X-axis (right)
+    - Z-axis becomes negative Y-axis
+    - X-axis stays X-axis
+
+    This is a proper +90-degree rotation about X. The previous coordinate
+    swap ``[x, y, z] -> [x, z, y]`` had determinant -1 and reflected the
+    input skeleton.
 
     Args:
         points (np.ndarray): Points with shape (..., 3) where last dimension is [x, y, z]
@@ -731,9 +735,8 @@ def transform_y_up_to_z_up(points):
     Returns:
         np.ndarray: Transformed points with shape (..., 3) where last dimension is [x, y, z]
     """
-    # Create transformation matrix
-    # [x, y, z] -> [x, z, y]
-    transform_matrix = np.array([[1, 0, 0], [0, 0, 1], [0, 1, 0]])
+    # [x, y, z] -> [x, -z, y]
+    transform_matrix = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])
 
     # Apply transformation
     if points.ndim == 1:

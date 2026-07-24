@@ -22,11 +22,14 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from holosoma_retargeting.config_types.data_type import DEMO_JOINTS_REGISTRY, MotionDataConfig  # noqa: E402
-from holosoma_retargeting.config_types.retargeter import RetargeterConfig  # noqa: E402
 from holosoma_retargeting.config_types.retargeting import RetargetingConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
+from holosoma_retargeting.config_types.sandbox_retargeting import (  # noqa: E402
+    SandboxRetargeterConfig,
+    SandboxRetargetingConfig,
+)
 from holosoma_retargeting.config_types.task import TaskConfig  # noqa: E402
-from holosoma_retargeting.src.interaction_mesh_retargeter_laplacian_smooth_first_order_no_trust_region_etasp import (  # noqa: E402
+from holosoma_retargeting.src.interaction_mesh_retargeter_sandbox_removed_experimental import (  # noqa: E402
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
 from holosoma_retargeting.src.utils import (  # noqa: E402
@@ -59,11 +62,12 @@ DEFAULT_DATA_FORMATS = {
 }
 
 DEFAULT_RESULTS_ROOT = Path(__file__).resolve().parents[1] / "demo_results_total"
+VARIANT_NAME = "sandbox_removed_experimental"
 
 DEFAULT_SAVE_DIRS = {
-    "robot_only": str(DEFAULT_RESULTS_ROOT / "laplacian_smooth_first_order_no_trust_region_etasp" / "{robot}" / "robot_only" / "omomo"),
-    "object_interaction": str(DEFAULT_RESULTS_ROOT / "laplacian_smooth_first_order_no_trust_region_etasp" / "{robot}" / "object_interaction" / "omomo"),
-    "climbing": str(DEFAULT_RESULTS_ROOT / "laplacian_smooth_first_order_no_trust_region_etasp" / "{robot}" / "climbing" / "mocap_climb"),
+    "robot_only": str(DEFAULT_RESULTS_ROOT / VARIANT_NAME / "{robot}" / "robot_only" / "omomo"),
+    "object_interaction": str(DEFAULT_RESULTS_ROOT / VARIANT_NAME / "{robot}" / "object_interaction" / "omomo"),
+    "climbing": str(DEFAULT_RESULTS_ROOT / VARIANT_NAME / "{robot}" / "climbing" / "mocap_climb"),
 }
 
 
@@ -447,14 +451,14 @@ def convert_object_poses_to_mujoco_order(object_poses: np.ndarray) -> np.ndarray
 
 
 def build_retargeter_kwargs_from_config(
-    retargeter_config: RetargeterConfig,
+    retargeter_config: SandboxRetargeterConfig,
     constants: SimpleNamespace,
     object_urdf_path: str | None,
     task_type: str,
 ) -> dict:
-    """Build kwargs for InteractionMeshRetargeter from a RetargeterConfig.
+    """Build kwargs for InteractionMeshRetargeter from a sandbox retargeter config.
     This is a convenience function that allows building kwargs directly from
-    a RetargeterConfig without needing a full RetargetingConfig.
+    a retargeter config without needing a full RetargetingConfig.
     Args:
         retargeter_config: Retargeter configuration
         constants: Task constants
@@ -478,6 +482,9 @@ def build_retargeter_kwargs_from_config(
         "visualize": retargeter_config.visualize,
         "debug": retargeter_config.debug,
         "w_nominal_tracking_init": retargeter_config.w_nominal_tracking_init,
+        "hessian_record_enabled": retargeter_config.hessian_record_enabled,
+        "hessian_record_frame_stride": retargeter_config.hessian_record_frame_stride,
+        "hessian_record_inner_stride": retargeter_config.hessian_record_inner_stride,
     }
     if task_type == "climbing":
         kwargs["nominal_tracking_tau"] = retargeter_config.nominal_tracking_tau
@@ -600,13 +607,13 @@ def determine_output_path(
 # ----------------------------- Main -----------------------------
 
 
-def main(cfg: RetargetingConfig) -> None:
+def main(cfg: SandboxRetargetingConfig) -> None:
     """Main retargeting pipeline.
     Args:
         cfg: Configuration arguments
     """
     # Validate configuration
-    validate_config(cfg)
+    validate_config(cfg) # 做数据格式和任务类型的验证，确保配置的一致性和正确性
 
     robot = cfg.robot
     task_name = cfg.task_name
@@ -636,7 +643,7 @@ def main(cfg: RetargetingConfig) -> None:
 
     constants = create_task_constants(
         robot_config=cfg.robot_config,
-        motion_data_config=cfg.motion_data_config,
+        motion_data_config=cfg.motion_data_config, # 当前输入的人体动作数据是什么格式，以及这种人体动作应该如何解释并映射到当前机器人
         task_config=cfg.task_config,
         task_type=task_type,
     )
@@ -644,7 +651,7 @@ def main(cfg: RetargetingConfig) -> None:
     # Load motion data
     human_joints, object_poses, smpl_scale = load_motion_data(
         task_type, data_format, data_path, task_name, constants, cfg.motion_data_config
-    )
+    ) # 加载原始动作数据。 human_joints是一个(T, J, 3)的数组，表示每一帧T中每个关节J的3D位置。object_poses是一个(T, 7)的数组，表示每一帧T中物体的位姿（四元数+位置）。smpl_scale是一个缩放因子，用于将人体动作数据缩放到与机器人尺寸相匹配。
 
     # Get toe names from motion data config (depends only on data_format)
     toe_names = cfg.motion_data_config.toe_names
@@ -725,5 +732,5 @@ def main(cfg: RetargetingConfig) -> None:
 
 
 if __name__ == "__main__":
-    cfg = tyro.cli(RetargetingConfig)
+    cfg = tyro.cli(SandboxRetargetingConfig)
     main(cfg)

@@ -84,6 +84,9 @@ class InteractionMeshRetargeter:
         debug: bool = False,
         w_nominal_tracking_init: float = 5.0,
         nominal_tracking_tau: float = 10.0,
+        hessian_record_enabled: bool = True,
+        hessian_record_frame_stride: int = 1,
+        hessian_record_inner_stride: int = 1,
     ):
         """This kinematic retargeter solves the diffIK problem with hard constraints in SQP style.
         During each SQP iteration, the problem is solved with the following constraints and costs:
@@ -199,6 +202,14 @@ class InteractionMeshRetargeter:
         self.w_nominal_tracking_init = w_nominal_tracking_init
         self.nominal_tracking_tau = nominal_tracking_tau
         self.track_nominal_indices = task_constants.NOMINAL_TRACKING_INDICES
+        self.hessian_record_enabled = bool(hessian_record_enabled)
+        self.hessian_record_frame_stride = int(hessian_record_frame_stride)
+        self.hessian_record_inner_stride = int(hessian_record_inner_stride)
+        if self.hessian_record_enabled:
+            if self.hessian_record_frame_stride <= 0:
+                raise ValueError("hessian_record_frame_stride must be positive when Hessian recording is enabled")
+            if self.hessian_record_inner_stride <= 0:
+                raise ValueError("hessian_record_inner_stride must be positive when Hessian recording is enabled")
         self._hessian_component_records: list[dict[str, int | np.ndarray]] = []
 
     def _init_foot_lock(self, foot_lock: FootLockConfig | None) -> None:
@@ -533,7 +544,7 @@ class InteractionMeshRetargeter:
                 if self.visualize and self.debug:
                     self.draw_q(q)
 
-                pbar.set_postfix(cost=cost)
+                pbar.set_postfix(cost=cost, refresh=False)
 
         # Remove previous debug visualization
         if self.debug:
@@ -554,17 +565,7 @@ class InteractionMeshRetargeter:
             robot_kpts_handle_list.clear()
 
         dest_res_path = Path(dest_res_path)
-        hessian_components_path = self._hessian_components_path(dest_res_path)
-        hessian_component_payload = self._hessian_component_payload(
-            num_frames=num_frames,
-            source_result_path=dest_res_path,
-        )
-
-        np.savez(hessian_components_path, **hessian_component_payload)
-
-        # Save results
-        np.savez(
-            dest_res_path,
+        result_payload = dict(
             qpos=np.array(retargeted_motions)[1:],
             human_joints=human_joint_motions,
             fps=30,
@@ -572,10 +573,24 @@ class InteractionMeshRetargeter:
             original_lap_cost=np.asarray(original_lap_costs, dtype=float),
             original_smooth_cost=np.asarray(original_smooth_costs, dtype=float),
             original_lap_smooth_cost=np.asarray(original_lap_smooth_costs, dtype=float),
-            hessian_components_file=np.asarray(hessian_components_path.name),
         )
+        if self._hessian_component_records:
+            hessian_components_path = self._hessian_components_path(dest_res_path)
+            hessian_component_payload = self._hessian_component_payload(
+                num_frames=num_frames,
+                source_result_path=dest_res_path,
+            )
+            np.savez(hessian_components_path, **hessian_component_payload)
+            result_payload["hessian_components_file"] = np.asarray(hessian_components_path.name)
+        else:
+            hessian_components_path = None
+
+        np.savez(dest_res_path, **result_payload)
         print("Saving results to path:", dest_res_path)
-        print("Saving Hessian component diagnostics to path:", hessian_components_path)
+        if hessian_components_path is not None:
+            print("Saving Hessian component diagnostics to path:", hessian_components_path)
+        else:
+            print("Skipping Hessian component diagnostics sidecar")
 
         if self.visualize:
             robot_dof = len(self.viser_robot.get_actuated_joint_limits())
@@ -791,35 +806,36 @@ class InteractionMeshRetargeter:
                 # if a full matrix was supplied, fall back to quad_form
                 obj_terms.append(cp.quad_form(dqa - dqa_smooth, Wsmooth))
 
-        hessian_components = self._assemble_hessian_components(
-            J_lap_active=J_lap_active,
-            J_V_active=J_V,
-            sqrt_w3=sqrt_w3,
-            num_robot_vertices=V_r,
-            w_nominal_tracking=w_nominal_tracking,
-            q_a_nominal=q_a_nominal,
-            smooth_weight=self.smooth_weight,
-            q_diag=Qd,
-        )
-        self._hessian_component_records.append(
-            {
-                "frame_idx": int(frame_idx),
-                "inner_iter": int(inner_iter),
-                "component_matrices": self._stack_hessian_components(hessian_components),
-                "q_active": np.asarray(q_a_n_last, dtype=float).copy(),
-                "q_eval": np.asarray(q, dtype=float).copy(),
-                "lap_J_V": np.asarray(J_V, dtype=float).copy(),
-                "lap_J_lap": (
-                    J_lap_active.toarray()
-                    if sp.issparse(J_lap_active)
-                    else np.asarray(J_lap_active, dtype=float)
-                ).copy(),
-                "lap_weights": np.asarray(sqrt_w3, dtype=float).reshape(-1) ** 2,
-                "lap_vertices": np.asarray(vertices, dtype=float).copy(),
-                "lap_num_robot_vertices": int(V_r),
-                "lap_robot_link_keys": np.asarray(robot_link_keys, dtype=str),
-            }
-        )
+        if self._should_record_hessian(frame_idx, inner_iter):
+            hessian_components = self._assemble_hessian_components(
+                J_lap_active=J_lap_active,
+                J_V_active=J_V,
+                sqrt_w3=sqrt_w3,
+                num_robot_vertices=V_r,
+                w_nominal_tracking=w_nominal_tracking,
+                q_a_nominal=q_a_nominal,
+                smooth_weight=self.smooth_weight,
+                q_diag=Qd,
+            )
+            self._hessian_component_records.append(
+                {
+                    "frame_idx": int(frame_idx),
+                    "inner_iter": int(inner_iter),
+                    "component_matrices": self._stack_hessian_components(hessian_components),
+                    "q_active": np.asarray(q_a_n_last, dtype=float).copy(),
+                    "q_eval": np.asarray(q, dtype=float).copy(),
+                    "lap_J_V": np.asarray(J_V, dtype=float).copy(),
+                    "lap_J_lap": (
+                        J_lap_active.toarray()
+                        if sp.issparse(J_lap_active)
+                        else np.asarray(J_lap_active, dtype=float)
+                    ).copy(),
+                    "lap_weights": np.asarray(sqrt_w3, dtype=float).reshape(-1) ** 2,
+                    "lap_vertices": np.asarray(vertices, dtype=float).copy(),
+                    "lap_num_robot_vertices": int(V_r),
+                    "lap_robot_link_keys": np.asarray(robot_link_keys, dtype=str),
+                }
+            )
 
         problem = cp.Problem(cp.Minimize(cp.sum(obj_terms)), constraints)
 
@@ -842,6 +858,15 @@ class InteractionMeshRetargeter:
         q_star[3:7] /= np.linalg.norm(q_star[3:7]) + 1e-12
 
         return q_star, cost
+
+    def _should_record_hessian(self, frame_idx: int, inner_iter: int) -> bool:
+        """Return whether to retain a Hessian diagnostic record for this local solve."""
+        if not self.hessian_record_enabled:
+            return False
+        return (
+            int(frame_idx) % self.hessian_record_frame_stride == 0
+            and int(inner_iter) % self.hessian_record_inner_stride == 0
+        )
 
     def _assemble_hessian_components(
         self,
@@ -1035,6 +1060,9 @@ class InteractionMeshRetargeter:
 
         return {
             "source_result_file": np.asarray(source_result_path.name),
+            "hessian_record_enabled": np.asarray(self.hessian_record_enabled),
+            "hessian_record_frame_stride": np.asarray(self.hessian_record_frame_stride, dtype=int),
+            "hessian_record_inner_stride": np.asarray(self.hessian_record_inner_stride, dtype=int),
             "hessian_frame": hessian_frame,
             "hessian_inner_iter": hessian_inner_iter,
             "hessian_component_names": np.asarray(HESSIAN_COMPONENT_NAMES),
