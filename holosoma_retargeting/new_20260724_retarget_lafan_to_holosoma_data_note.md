@@ -79,7 +79,7 @@ horizontal origin: first-frame Hips XZ
 生成文件位于：
 
 ```text
-demo_results_total/generated_inputs/retarget_lafan/
+generated_data/retarget_lafan/
 ```
 
 Holosoma loader 随后把 Y-up NPY 转换为求解器使用的 Z-up 坐标。源 NPZ 是人体动作中间
@@ -162,9 +162,9 @@ aiming 使用完整 BVH。dance1 和 dance2 因原始 BVH 为空，使用有效 
 正式 Holosoma LAFAN 输入为：
 
 ```text
-demo_results_total/generated_inputs/retarget_lafan/aiming1_subject1.npy
-demo_results_total/generated_inputs/retarget_lafan/dance1_subject2.npy
-demo_results_total/generated_inputs/retarget_lafan/dance2_subject5.npy
+generated_data/retarget_lafan/aiming1_subject1.npy
+generated_data/retarget_lafan/dance1_subject2.npy
+generated_data/retarget_lafan/dance2_subject5.npy
 ```
 
 对应 shape 分别为 `(7184, 22, 3)`、`(3945, 22, 3)` 和 `(6771, 22, 3)`。三份数据均为
@@ -185,7 +185,7 @@ demo_results_total/generated_inputs/retarget_lafan/dance2_subject5.npy
 发现、BVH 优先选择、NPZ 回退验证、任务生成和 Holosoma sandbox 运行。
 
 `Retarget/bvh_npz/` 下的源 BVH 和 NPZ 保持原状。当前适配生成的数据写入 Holosoma 的
-`demo_results_total/generated_inputs/retarget_lafan/`。
+`generated_data/retarget_lafan/`。
 
 ## 8. 复现
 
@@ -194,7 +194,7 @@ demo_results_total/generated_inputs/retarget_lafan/dance2_subject5.npy
 ```bash
 conda run -n robot python data_conversion/convert_lafan_bvh_to_holosoma.py \
     ../../Retarget/bvh_npz/lafan1/aiming1_subject1.bvh \
-    --output-dir demo_results_total/generated_inputs/retarget_lafan \
+    --output-dir generated_data/retarget_lafan \
     --force
 ```
 
